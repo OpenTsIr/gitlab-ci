@@ -1,0 +1,79 @@
+image: docker:20.10.10
+
+before_script:
+  ##
+  ## Install ssh-agent if not already installed, it is required by Docker.
+  ## (change apt-get to yum if you use an RPM-based image)
+  ##
+  - 'command -v ssh-agent >/dev/null || ( apt-get update -y && apt-get install openssh-client -y )'
+
+  ##
+  ## Run ssh-agent (inside the build environment)
+  ##
+  - eval $(ssh-agent -s)
+
+  ##
+  ## Add the SSH key stored in SSH_PRIVATE_KEY variable to the agent store
+  ## We're using tr to fix line endings which makes ed25519 keys work
+  ## without extra base64 encoding.
+  ## https://gitlab.com/gitlab-examples/ssh-private-key/issues/1#note_48526556
+  ##
+  - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+
+  ##
+  ## Create the SSH directory and give it the right permissions
+  ##
+  - mkdir -p ~/.ssh
+  - chmod 700 ~/.ssh
+
+  ##
+  ## Use ssh-keyscan to scan the keys of your private server. Replace gitlab.com
+  ## with your own domain name. You can copy and repeat that command if you have
+  ## more than one server to connect to.
+  ##
+  - ssh-keyscan miad.dev >> ~/.ssh/known_hosts
+  - chmod 644 ~/.ssh/known_hosts
+
+stages:
+  - build
+  - deploy
+
+variables:
+  # IMAGE_NAME: registry.gitlab.com/opentsir/gitlab-ci:${CI_COMMIT_TAG}
+  IMAGE_NAME: registry.gitlab.com/opentsir/gitlab-ci:${CI_COMMIT_SHORT_SHA}
+
+builder:
+  stage: build
+  only:
+    - main
+  #   - tags
+  when: manual
+  services:
+    - docker
+  script:
+    - echo -n $DOCKER_PASSWORD | base64 -d | docker login registry.gitlab.com --username $DOCKER_USERNAME --password-stdin
+    - docker build
+        -t $IMAGE_NAME
+        -f Dockerfile.prod
+        .
+
+    - docker push $IMAGE_NAME
+
+deployment:
+  stage: deploy
+  only:
+    - main
+  script: 
+    - cat <<EOF | > deployment.sh
+      IMAGE_NAME=$IMAGE_NAME
+      DOCKER_USERNAME=$DOCKER_USERNAME
+      DOCKER_PASSWORD=$DOCKER_PASSWORD
+      EOF
+
+    - cat deployment.sh
+    
+    - cat deploy.sh >> deployment.sh
+    
+    - cat deployment.sh
+    
+    - deployment.sh | ssh $REMOTE_USER@$REMOTE_SERVER_DOMAIN
